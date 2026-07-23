@@ -1,13 +1,17 @@
-name: 디시인사이드 갤러리 확인
+name: DCInside 공군 갤러리 키워드 체커
 
 on:
   schedule:
-    # 매시 정각 혼잡을 피하려고 42분에 실행 (1시간 간격)
-    - cron: "42 * * * *"
-  workflow_dispatch: {}
+    # 매시간 정각 실행 (UTC 기준 - 한국 시간과 9시간 차이)
+    - cron: "0 * * * *"
+  workflow_dispatch: {}  # 필요할 때 수동 실행 가능
 
 permissions:
-  contents: write
+  contents: write  # seen_dcinside.json 커밋을 위해 필요
+
+concurrency:
+  group: dcinside-checker
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -16,23 +20,23 @@ jobs:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
 
-      - name: 파이썬 설치
+      - name: Python 설치
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: 필요한 패키지 설치
+      - name: 패키지 설치
         run: pip install requests beautifulsoup4
 
-      - name: 갤러리 확인 스크립트 실행
+      - name: 크롤러 실행
         env:
           DISCORD_WEBHOOK_URL_AIRFORCE: ${{ secrets.DISCORD_WEBHOOK_URL_AIRFORCE }}
         run: python dcinside_checker.py
 
-      - name: 확인 기록 커밋
+      - name: seen_dcinside.json 변경사항 커밋
         run: |
-          git config user.name "notice-bot"
-          git config user.email "notice-bot@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add seen_dcinside.json
-          git diff --staged --quiet || git commit -m "update seen dcinside notices"
+          git diff --staged --quiet || git commit -m "chore: seen_dcinside.json 업데이트 [skip ci]"
           git push
