@@ -34,6 +34,10 @@ BOARDS = [
 
 SEEN_FILE = "seen_dcinside.json"
 
+# 첫 실행(기준선 없음) 때 몇 페이지까지 긁어서 초기 기준을 잡을지
+# 디시인사이드는 보통 페이지당 20개 안팎이라 5페이지면 대략 100개 근처가 됨
+INITIAL_FETCH_PAGES = 5
+
 # 디시인사이드는 봇으로 보이는 요청을 차단하는 경우가 있어서
 # 실제 브라우저와 비슷한 헤더를 사용함
 HEADERS = {
@@ -56,8 +60,10 @@ def save_seen(seen):
         json.dump(seen, f, ensure_ascii=False, indent=2)
 
 
-def fetch_notices(board):
-    resp = requests.get(board["url"], headers=HEADERS, timeout=15)
+def fetch_page(board, page):
+    """게시판의 특정 페이지 하나를 가져와서 (id, 제목, 작성자, 날짜, 링크) 리스트로 반환"""
+    url = board["url"] + f"&page={page}"
+    resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     resp.encoding = resp.apparent_encoding or "utf-8"
 
@@ -91,7 +97,6 @@ def fetch_notices(board):
         tr = a.find_parent("tr")
         if tr:
             tds = [td.get_text(strip=True) for td in tr.find_all("td")]
-            # 디시인사이드는 날짜가 'YYYY-MM-DD' / 'MM.DD' / 'HH:MM' 등 여러 형식으로 표시됨
             date_candidates = [
                 t
                 for t in tds
@@ -118,6 +123,26 @@ def fetch_notices(board):
         )
 
     return notices
+
+
+def fetch_notices(board, pages=1):
+    """1페이지부터 지정한 페이지 수까지 순회하며 게시글을 모두 모아서 반환"""
+    all_notices = []
+    for page in range(1, pages + 1):
+        try:
+            page_notices = fetch_page(board, page)
+        except Exception as e:
+            print(f"[오류] '{board['name']}' {page}페이지 가져오기 실패: {e}")
+            break
+
+        if not page_notices:
+            break  # 더 이상 글이 없는 페이지에 도달
+        all_notices.extend(page_notices)
+
+        if pages > 1:
+            time.sleep(1)  # 여러 페이지 연속 요청 시 차단 방지용 딜레이
+
+    return all_notices
 
 
 def send_discord_message(webhook_url, board_name, notice):
@@ -173,8 +198,11 @@ def main():
         seen.setdefault(name, [])
         already_seen = set(seen[name])
 
+        is_first_run = len(already_seen) == 0
+        pages_to_fetch = INITIAL_FETCH_PAGES if is_first_run else 1
+
         try:
-            notices = fetch_notices(board)
+            notices = fetch_notices(board, pages=pages_to_fetch)
         except Exception as e:
             print(f"[오류] '{name}' 크롤링 실패: {e}")
             continue
@@ -183,18 +211,24 @@ def main():
             print(f"[알림] '{name}' 에서 글을 하나도 못 가져왔습니다. "
                   f"사이트 구조가 바뀌었거나 접근이 차단됐을 수 있습니다.")
 
-        new_notices = [n for n in notices if n["id"] not in already_seen]
-        new_notices.reverse()
+        if is_first_run:
+            # 첫 실행: 최근 글들을 '이미 본 것'으로 기준선만 잡고, 알림은 보내지 않음
+            new_ids = [n["id"] for n in notices if n["id"] not in already_seen]
+            seen[name].extend(new_ids)
+            print(f"[초기화] '{name}' 최근 {len(new_ids)}건을 기준선으로 저장 (알림 없음)")
+        else:
+            new_notices = [n for n in notices if n["id"] not in already_seen]
+            new_notices.reverse()
 
-        for notice in new_notices:
-            print(f"[새 글] ({name}) {notice['title']}")
-            success = send_discord_message(webhook_url, name, notice)
-            if success:
-                seen[name].append(notice["id"])
-                total_new += 1
-            else:
-                print(f"[보류] ({name}) {notice['title']} → 다음 실행 때 재시도됨")
-            time.sleep(1)
+            for notice in new_notices:
+                print(f"[새 글] ({name}) {notice['title']}")
+                success = send_discord_message(webhook_url, name, notice)
+                if success:
+                    seen[name].append(notice["id"])
+                    total_new += 1
+                else:
+                    print(f"[보류] ({name}) {notice['title']} → 다음 실행 때 재시도됨")
+                time.sleep(1)
 
         # 목록이 너무 커지지 않도록 최근 500개만 유지 (갤러리는 글이 많음)
         seen[name] = seen[name][-500:]
