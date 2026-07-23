@@ -5,6 +5,8 @@
 - 게시판 전체 글이 아니라, 지정한 키워드로 검색한 결과만 확인
   (DC인사이드 자체 검색 기능: s_type=search_subject_memo → 제목+내용 검색)
 - 키워드마다 최근 게시글을 최대 RESULTS_PER_KEYWORD 건까지만 확인
+- 같은 글이 여러 키워드에 동시에 매칭되면, 매칭된 모든 키워드 배열에 각각 기록됨
+  (단, 같은 실행 안에서 디스코드 중복 알림은 가지 않도록 방지)
 - 새 글이 있으면 지정된 디스코드 채널로 알림 전송 (메시지 맨 앞에 [키워드:...] 표시)
 - 이미 본 글 목록은 seen_dcinside.json 에 "갤러리 > 키워드 > 글ID 리스트" 형태로 저장
   (GitHub Actions가 자동 커밋)
@@ -15,7 +17,7 @@ import os
 import re
 import sys
 import time
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin, quote, urlparse, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
@@ -32,6 +34,7 @@ BOARDS = [
         "url": "https://gall.dcinside.com/board/lists/?id=airforce",
         "base": "https://gall.dcinside.com",
         "webhook_env": "DISCORD_WEBHOOK_URL_AIRFORCE",
+        "gallery_id": "airforce",  # 실제 게시글 링크의 id= 파라미터와 대조하기 위함
         "id_param": "no",
         "link_marker": "/board/view/",
     },
@@ -114,10 +117,20 @@ def fetch_page(board, keyword, page):
 
     id_param = board["id_param"]
     link_marker = board["link_marker"]
+    gallery_id = board["gallery_id"]
 
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if link_marker not in href:
+            continue
+
+        # 디시인사이드 페이지 사이드바에는 '실시간 베스트(디시베스트, id=dcbest)' 등
+        # 전혀 다른 갤러리의 인기글 링크가 항상 같이 붙어 있음.
+        # /board/view/ 라는 문자열만으로는 이런 무관한 링크까지 걸리므로,
+        # 반드시 이 갤러리(gallery_id)의 글인지 id= 파라미터로 한 번 더 확인한다.
+        query = parse_qs(urlparse(href).query)
+        href_gallery_id = query.get("id", [None])[0]
+        if href_gallery_id != gallery_id:
             continue
 
         match = re.search(rf"{id_param}=(\d+)", href)
@@ -273,7 +286,8 @@ def main():
                   f"사이트 구조가 바뀌었거나 접근이 차단됐을 수 있습니다.")
 
         # 같은 글이 여러 키워드에 동시에 매칭될 수 있으므로 id 기준 중복 제거
-        # (먼저 매칭된 키워드로 귀속시킴)
+        # (먼저 매칭된 키워드 하나에만 귀속시켜, 같은 글이 여러 키워드 배열에
+        #  중복으로 쌓이지 않도록 함)
         unique_notices = {}
         for n in all_notices:
             if n["id"] not in unique_notices:
@@ -300,7 +314,6 @@ def main():
                     board_seen[notice["keyword"]].append(notice["id"])
                     total_new += 1
                 else:
-                    # 저장하지 않으면 다음 실행 때 다시 시도하게 됨
                     print(f"[보류] ({name}) {notice['title']} → 다음 실행 때 재시도됨")
                 time.sleep(1)
 
