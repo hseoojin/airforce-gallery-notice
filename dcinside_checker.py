@@ -77,6 +77,11 @@ HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
+# 환경변수 NOTIFY_ON_FIRST_RUN=1 로 설정하면, 기준선이 없는 첫 실행이더라도
+# 지금 찾은 글들을 전부 '새 글'처럼 취급해서 실제로 디스코드 알림을 보냄
+# (평소엔 설정하지 않는 게 정상 - 매번 20건씩 재알림되는 걸 막기 위함)
+FORCE_NOTIFY_ON_FIRST_RUN = os.environ.get("NOTIFY_ON_FIRST_RUN") == "1"
+
 
 def load_seen():
     if os.path.exists(SEEN_FILE):
@@ -294,7 +299,7 @@ def main():
                 unique_notices[n["id"]] = n
         notices = list(unique_notices.values())
 
-        if is_first_run:
+        if is_first_run and not FORCE_NOTIFY_ON_FIRST_RUN:
             # 첫 실행: 발견된 글들을 '이미 본 것'으로 기준선만 잡고, 알림은 보내지 않음
             baseline_count = 0
             for n in notices:
